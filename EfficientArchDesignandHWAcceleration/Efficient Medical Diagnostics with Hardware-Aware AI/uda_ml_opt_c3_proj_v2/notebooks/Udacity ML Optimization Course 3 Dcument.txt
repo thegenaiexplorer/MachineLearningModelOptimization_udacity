@@ -1,0 +1,547 @@
+1) Unzip the file and go to project/starter/notebooks folder
+2) Use the following order for viewing the notebooks. Though I conducted 12 experiments and submitted each of the experiment in a separate notebook, I was asked to resubmit showing the details only for the best at each of the stages
+
+1) 01_baseline_analysis.ipynb --> Contains the baseline model analysis and training and all the ToDo's for baseline stage
+
+2) 02_architecture_optimization.ipynb --> Contains the details for the best experiment with stats for all the 12 experiments conducted
+
+3) 03_deployment_acceleration.ipynb -->Contains the details for best experiment for 3rd stage:
+
+
+onnx model conversion results are also consolidated in "Onnx model stats comparison.xlsx". This is for 4 experiments that I selected initially for 3rd stage
+
+Please read the following section on the changes done at each stage of experimentation.
+
+#########################################################################
+#########################################################################
+Experiments Documentation
+#########################################################################
+#########################################################################
+
+1) Updating layers of downloaded model is a risky task specifically when we do not know how it is structured. Though we can see what modules comprise the model but that is just an output of what is there inside class definition in dunder init method. How components interact with each other is best determined by looking at forward method of model. So, instead of updating modules on the fly, we recreated resnet18 architecture module by module and use this defined structure for all the experiments other than the baseline which is already defined for us. Instead of updating modules on the fly, we use model's class definition for updating the components and then retrain model from scratch. This is a much cleaner way of doing experiments. We did some heavy surgery on model layers, so this seemed to be the best way to conduct experiments. 
+
+Important
+------------
+And for this reason function transfer_compatible_weights(source_model, target_model) is not implemented in any of the experiments.
+
+2) Following base model structure (which mirrors resnet18 architecture used in baseline model) is used and modified for all experiments. It has the same number of parameters as baseline model. Obviously original resnet18 architecture does not include interpolation to 224x224 as it can accommodate all image sizes >=64 so long it can be reduced in 5 stages with each stage reducing its feature size by 0.5. Of course classification layer has to be modified as per the number of objects to be classified. No residual layer is defined for block 1 in baseline model, so we removed residual connection for block 1.
+
+class ResNet18(nn.Module):
+        def __init__(self):
+            super().__init__()
+
+            self.conv_block_0 = nn.Sequential(
+                nn.Conv2d(3, 64, 7, padding=3, stride=2, bias=False),
+                nn.BatchNorm2d(64),
+                nn.ReLU(inplace=True),
+                nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+                )
+        
+            ### Residual Block 1 (3x3) - No reduction required
+              
+            self.residual_block_1_0 = nn.Sequential(
+                nn.Conv2d(64, 64, 3, padding=1, bias=False),
+                nn.BatchNorm2d(64),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(64, 64, 3, padding=1, bias=False),
+                nn.BatchNorm2d(64)
+                )
+            self.residual_block_1_1 = nn.Sequential(
+                nn.Conv2d(64, 64, 3, padding=1, bias=False),
+                nn.BatchNorm2d(64),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(64,64,3,padding=1, bias=False),
+                nn.BatchNorm2d(64),
+                )
+        
+            ###Residual Block 2 Reduction required in first Conv2D in first block component
+            self.shortcut_3 = nn.Sequential(
+                nn.Conv2d(64, 128, 1, padding=0, stride=2, bias=False),
+                nn.BatchNorm2d(128)
+                )
+        
+            self.residual_block_2_0 = nn.Sequential(
+                nn.Conv2d(64, 128, 3, padding=1, stride=2, bias=False),
+                nn.BatchNorm2d(128),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(128, 128,3, padding=1, bias=False),
+                nn.BatchNorm2d(128)
+                )
+            self.residual_block_2_1 = nn.Sequential(
+                nn.Conv2d(128, 128, 3, padding=1, bias=False),
+                nn.BatchNorm2d(128),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(128, 128,3, padding=1, bias=False),
+                nn.BatchNorm2d(128),
+                )
+        
+        
+            ###Residual Block 3 Reduction required in first Conv2D in first block component
+        
+            self.shortcut_5 = nn.Sequential(
+                nn.Conv2d(128, 256, 1, padding=0, stride=2, bias=False),
+                nn.BatchNorm2d(256)
+                )
+            self.residual_block_3_0 = nn.Sequential(
+                nn.Conv2d(128, 256, 3, padding=1, stride=2, bias=False),
+                nn.BatchNorm2d(256),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(256, 256,3, padding=1, bias=False),
+                nn.BatchNorm2d(256)
+                )
+
+            self.residual_block_3_1 = nn.Sequential(
+                nn.Conv2d(256, 256, 3, padding=1, bias=False),
+                nn.BatchNorm2d(256),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(256, 256,3, padding=1, bias=False),
+                nn.BatchNorm2d(256),
+                )
+            ##Residual Block 4 Reduction required in first Conv2D in first block component
+        
+            self.shortcut_7 = nn.Sequential(
+                nn.Conv2d(256, 512, 1, padding=0, stride=2, bias=False),
+                nn.BatchNorm2d(512)
+                )
+        
+            self.residual_block_4_0 = nn.Sequential(
+                nn.Conv2d(256, 512, 3, padding=1, stride=2, bias=False),
+                nn.BatchNorm2d(512),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(512, 512,3, padding=1, bias=False),
+                nn.BatchNorm2d(512)
+                )
+            self.residual_block_4_1 = nn.Sequential(
+                nn.Conv2d(512, 512, 3, padding=1, bias=False),
+                nn.BatchNorm2d(512),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(512, 512,3, padding=1, bias=False),
+                nn.BatchNorm2d(512),
+                )
+            self.aggregate = nn.AdaptiveAvgPool2d((1,1))
+        
+            self.classifier = nn.Sequential(
+                nn.Flatten(),
+                nn.Dropout(0.4),
+                nn.Linear(512, 2)
+                )
+            self.input_size = native_size
+        
+        def forward(self, x):
+            x = self.conv_block_0(x)
+            x = self.residual_block_1_0(x)
+            x = self.residual_block_1_1(x)
+            x_shortcut_3 = self.shortcut_3(x)
+            x = self.residual_block_2_0(x)
+            x = x + x_shortcut_3
+            x = nn.ReLU(inplace=True)(x)
+                
+            x_shortcut_4 = x
+            x = self.residual_block_2_1(x)
+            x = x + x_shortcut_4
+            x =  nn.ReLU(inplace=True)(x)
+        
+            x_shortcut_5 = self.shortcut_5(x)
+            x = self.residual_block_3_0(x)
+            x = x + x_shortcut_5
+            x = nn.ReLU(inplace=True)(x)
+
+            x_shortcut_6 = x
+            x = self.residual_block_3_1(x)
+            x = x + x_shortcut_6
+            x = nn.ReLU(inplace=True)(x)
+        
+            x_shortcut_7 = self.shortcut_7(x)
+            x = self.residual_block_4_0(x)
+            x = x + x_shortcut_7
+            x = nn.ReLU(inplace=True)(x)
+                
+            x_shortcut_8 = x
+            x = self.residual_block_4_1(x)
+            x = x + x_shortcut_8
+            x = nn.ReLU(inplace=True)(x)
+        
+            x = self.aggregate(x)
+        
+            x = self.classifier(x)
+            return x
+
+Experiment Name : Interpolation Removal
+Filename : 02_architecture_optimization_interp_rem.ipynb
+3) For removing interpolation factor from baseline model we have just used the model defined above. It does not include any interpolation step.
+
+Experiment Name : Interpolation Removal with reduction in block kernel size
+Filename : 02_architecture_optimization_interp_rem_exp2.ipynb
+3i) We just reduced kernel size to 3x3 from 7x7 in block 0 and replaced Linear layer with 1x1 convolution in classifier layer. This one small change itself reduced peak memory by 17 mb.
+
+
+Experiment Name: DepthWise Separable Convolution
+Filename : 02_architecture_optimization_dw_sep.ipynb
+
+4) For depthwise separable convolution, we have replaced each of the convbatchnorm2drelu with corresponding depthwise separable convolution block.
+For example, 
+original : 
+
+self.residual_block_2_0 = nn.Sequential(
+                nn.Conv2d(64, 128, 3, padding=1, stride=2, bias=False),
+                nn.BatchNorm2d(128),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(128, 128,3, padding=1, bias=False),
+                nn.BatchNorm2d(128)
+                )
+self.residual_block_2_1 = nn.Sequential(
+                nn.Conv2d(128, 128, 3, padding=1, bias=False),
+                nn.BatchNorm2d(128),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(128, 128,3, padding=1, bias=False),
+                nn.BatchNorm2d(128),
+                )
+
+Changed to:
+
+self.residual_block_2_0 = nn.Sequential(
+                nn.Conv2d(64, 64, 3, padding=1, stride=2, groups=64, bias=False),
+                nn.BatchNorm2d(64),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(64, 128, 1, bias=False),
+                nn.BatchNorm2d(128),
+                nn.ReLU(inplace=True),
+            
+                nn.Conv2d(128, 128,3, padding=1, groups=128, bias=False),
+                nn.BatchNorm2d(128),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(128, 128,1, bias=False),
+                nn.BatchNorm2d(128)
+                )
+self.residual_block_2_1 = nn.Sequential(
+                nn.Conv2d(128, 128, 3, padding=1, groups=128, bias=False),
+                nn.BatchNorm2d(128),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(128, 128, 1, bias=False),
+                nn.BatchNorm2d(128),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(128, 128,3, padding=1, groups=128, bias=False),
+                nn.BatchNorm2d(128),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(128, 128, 1, bias=False),
+                nn.BatchNorm2d(128),
+                )
+
+
+
+Experiment Name: Inverted Residual Block
+Filename : 02_architecture_optimization_invert_resid.ipynb
+5) For Inverted Residual Block Experiment, we have replaced each of the block with its inverted residual block equivalent.
+For example:
+Original:
+
+self.residual_block_2_0 = nn.Sequential(
+                nn.Conv2d(64, 128, 3, padding=1, stride=2, bias=False),
+                nn.BatchNorm2d(128),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(128, 128,3, padding=1, bias=False),
+                nn.BatchNorm2d(128)
+                )
+self.residual_block_2_1 = nn.Sequential(
+                nn.Conv2d(128, 128, 3, padding=1, bias=False),
+                nn.BatchNorm2d(128),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(128, 128,3, padding=1, bias=False),
+                nn.BatchNorm2d(128),
+                )
+
+changed to:
+
+self.residual_block_2_0 = nn.Sequential(
+                nn.Conv2d(64, 128*2, 1, bias=False),
+                nn.BatchNorm2d(128*2),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(128*2, 128*2, 3, padding=1, stride=2, groups=128*2, bias=False),
+                nn.BatchNorm2d(128*2),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(128*2, 128, 1, bias=False),
+                nn.BatchNorm2d(128),
+                )
+self.residual_block_2_1 = nn.Sequential(
+                nn.Conv2d(128, 128*2, 1, bias=False),
+                nn.BatchNorm2d(128*2),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(128*2, 128*2, 3, padding=1, groups=128*2, bias=False),
+                nn.BatchNorm2d(128*2),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(128*2, 128, 1, bias=False),
+                nn.BatchNorm2d(128),
+                )
+        
+6) For other depthwise separable convolution experiments, following changes were made to base model structure:
+
+experiment 1: interpolation_removal_depthwise_sep_custom
+filename : 02_architecture_optimization_dw_sep_custom.ipynb
+
+changes done:
+a) In block 0, we replaced 7x7 kernel with a 3x3 kernel, this is expected to reduce the memory consumption and operations required in single convolution.
+b) We removed block 1
+c) We removed depthwise separable convolutions from blocks 2 and 3 and reintroduced dense convolutions in block 2 and 3 and 
+d) We replace linear layer in classifier layer with 1x1 convolution
+This is expected to reduce latency to required level (<3 ms) which we were not able to hit in the original depthwise separable convolution experiment
+
+experiment 2: interpolation_removal_depthwise_sep_custom_exp2
+filename: 02_architecture_optimization_dw_sep_custom_exp2.ipynb
+
+changes done over experiment 1:
+a) we decided to make model more light weight
+b) If you see model structure in experiment 1 above, 4th block contains two blocks with each block consisting of 2 depthwise separable convolutions. This actually is resulting on lot of operations over base original structure which actually increases activation memory plus latency.. We reduced depthwise separable convolution to half of original from each of the sub block.
+
+For example 
+original block 2:
+
+self.residual_block_4_0 = nn.Sequential(
+            nn.Conv2d(256, 256, 3, padding=1, stride=2, groups=256, bias=False),
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, 512, 1, bias=False),
+            nn.BatchNorm2d(512),
+            nn.ReLU(inplace=True),
+            
+            nn.Conv2d(512, 512,3, padding=1, groups=512, bias=False),
+            nn.BatchNorm2d(512),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(512, 512,1, bias=False),
+            nn.BatchNorm2d(512)
+            )
+        self.residual_block_4_1 = nn.Sequential(
+            nn.Conv2d(512, 512, 3, padding=1, groups=512, bias=False),
+            nn.BatchNorm2d(512),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(512, 512, 1, bias=False),
+            nn.BatchNorm2d(512),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(512, 512,3, padding=1, groups=512, bias=False),
+            nn.BatchNorm2d(512),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(512, 512, 1, bias=False),
+            nn.BatchNorm2d(512),
+            )
+changed to :
+
+self.residual_block_4_0 = nn.Sequential(
+            nn.Conv2d(256, 256, 3, padding=1, stride=2, groups=256, bias=False),
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, 512, 1, bias=False),
+            nn.BatchNorm2d(512),
+            )
+        self.residual_block_4_1 = nn.Sequential(
+            nn.Conv2d(512, 512, 3, padding=1, groups=512, bias=False),
+            nn.BatchNorm2d(512),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(512, 512, 1, bias=False),
+            nn.BatchNorm2d(512),
+            )
+
+
+
+experiment 3: interpolation_removal_depthwise_sep_custom_exp3
+filename: 02_architecture_optimization_dw_sep_custom_exp3.ipynb
+
+changes done over experiment 2:
+
+a) if you see the results of experiment 2, it brought down latency to less than 2.2 ms which was excellent, however peak memory though less than 100 mb hovered around 93-94 mb. We want to target peak memory specifically now that we have sufficient room with respect to latency. 
+b) We introduced inverted residual structure in block 3
+
+original in experiment 2:
+
+self.residual_block_3_0 = nn.Sequential(
+            nn.Conv2d(128, 256, 3, padding=1, stride=2, bias=False),
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, 256,3, padding=1, bias=False),
+            nn.BatchNorm2d(256)
+            )
+
+        self.residual_block_3_1 = nn.Sequential(
+            nn.Conv2d(256, 256, 3, padding=1, bias=False),
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, 256,3, padding=1, bias=False),
+            nn.BatchNorm2d(256),
+            )
+
+changed to:
+
+self.residual_block_3_0 = nn.Sequential(
+                nn.Conv2d(128, 320, 1, bias=False),
+                nn.BatchNorm2d(320),
+                nn.ReLU(inplace=True), 
+                nn.Conv2d(320, 320, 3, padding=1, stride=2, groups=320, bias=False),
+                nn.BatchNorm2d(320),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(320, 256, 1, bias=False),
+                nn.BatchNorm2d(256),
+                )
+self.residual_block_3_1 = nn.Sequential(
+                nn.Conv2d(256, 320, 1, bias=False),
+                nn.BatchNorm2d(320),
+                nn.ReLU(inplace=True), 
+                nn.Conv2d(320, 320, 3, padding=1, groups=320, bias=False),
+                nn.BatchNorm2d(320),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(320, 256,1, bias=False),
+                nn.BatchNorm2d(256)
+                )
+This is expected to bring down number of parameters. Experiments results showed reduction in 5 mb of memory as a result of this(from ~90 to ~85)
+
+
+experiment 4: interpolation_removal_depthwise_sep_custom_exp4
+filename: 02_architecture_optimization_dw_sep_custom_exp4.ipynb
+
+changes done over experiment 3:
+
+a) Experiment 3 showed reduction in peak memory with slight increase in latency. We continue to target peak memory reduction
+b) we replaced dense convolutions in block 2 in experiment 3 to inverted residual blocks
+
+original:
+self.residual_block_2_0 = nn.Sequential(
+            nn.Conv2d(64, 128, 3, padding=1, stride=2, bias=False),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(128, 128,3, padding=1, bias=False),
+            nn.BatchNorm2d(128)
+            )
+self.residual_block_2_1 = nn.Sequential(
+            nn.Conv2d(128, 128, 3, padding=1, bias=False),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(128, 128,3, padding=1, bias=False),
+            nn.BatchNorm2d(128),
+            )
+changed to:
+
+self.residual_block_2_0 = nn.Sequential(
+                nn.Conv2d(64, 128*2, 1, bias=False),
+                nn.BatchNorm2d(128*2),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(128*2, 128*2, 3, padding=1, stride=2, groups=128*2, bias=False),
+                nn.BatchNorm2d(128*2),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(128*2, 128, 1, bias=False),
+                nn.BatchNorm2d(128)
+                )
+self.residual_block_2_1 = nn.Sequential(
+                nn.Conv2d(128, 128*2, 1, bias=False),
+                nn.BatchNorm2d(128*2),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(128*2, 128*2, 3, padding=1, groups=128*2, bias=False),
+                nn.BatchNorm2d(128*2),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(128*2, 128, 1, bias=False),
+                nn.BatchNorm2d(128)
+                )
+This is expected to bring down peak memory with slight hit on latency
+
+
+experiment 5: interpolation_removal_depthwise_sep_custom_exp5
+filename: 02_architecture_optimization_dw_sep_custom_exp5.ipynb
+
+changes done over experiment 4:
+
+a) we reduced the size of expansion block in block 2 from 128*2(256) to 160
+
+original:
+self.residual_block_2_0 = nn.Sequential(
+                nn.Conv2d(64, 128*2, 1, bias=False),
+                nn.BatchNorm2d(128*2),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(128*2, 128*2, 3, padding=1, stride=2, groups=128*2, bias=False),
+                nn.BatchNorm2d(128*2),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(128*2, 128, 1, bias=False),
+                nn.BatchNorm2d(128)
+                )
+self.residual_block_2_1 = nn.Sequential(
+                nn.Conv2d(128, 128*2, 1, bias=False),
+                nn.BatchNorm2d(128*2),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(128*2, 128*2, 3, padding=1, groups=128*2, bias=False),
+                nn.BatchNorm2d(128*2),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(128*2, 128, 1, bias=False),
+                nn.BatchNorm2d(128)
+                )
+changed to:
+self.residual_block_2_0 = nn.Sequential(
+                nn.Conv2d(64, 160, 1, bias=False),
+                nn.BatchNorm2d(160),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(160, 160, 3, padding=1, stride=2, groups=160, bias=False),
+                nn.BatchNorm2d(160),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(160, 128, 1, bias=False),
+                nn.BatchNorm2d(128)
+                )
+self.residual_block_2_1 = nn.Sequential(
+                nn.Conv2d(128, 160, 1, bias=False),
+                nn.BatchNorm2d(160),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(160, 160, 3, padding=1, groups=160, bias=False),
+                nn.BatchNorm2d(160),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(160, 128, 1, bias=False),
+                nn.BatchNorm2d(128)
+                )
+
+
+This change reduced peak memory to 71.83 mb while keeping latency less than 3 seconds
+
+experiment name : interpolation_removal_invert_resid_custom
+file name : 02_architecture_optimization_invert_resid_custom.ipynb
+
+7) We did one custom experiment on inverted residual block structure. Following changes were made:
+a) replace 7x7 convolution to 3x3 convolution in block 0
+b) Replaced linear with 1x1 convolution in classifier layer
+c) Removed block 1 
+d) Reintroduced dense convolutions in block 2
+e) reduced number of expansion size in blocks 3 and 4.
+This resulted in peak memory going down to 77 mb while containing latency at ~2.5 ms. 
+
+experiment name : interpolation_removal_invert_resid_custom_exp2
+file name : 02_architecture_optimization_invert_resid_custom_exp2.ipynb
+
+8) On original inverted residual block run, we just replaced 7x7 kernel with 3x3
+and Replaced linear with 1x1 convolution in classifier layer. We let entire structure remain as is like in base inverted residual block run.
+
+experiment name : interpolation_removal_invert_resid_custom_exp3
+file name : 02_architecture_optimization_invert_resid_custom_exp3.ipynb
+
+9) From experiment 2 above, we reintroduced dense convolution in blocks 1, 2, and 3 and reduced expansion size to 520 in block 4. This brought our per sample latency to 2.6 ms and batch latency to 3.048 which is very close to desired value.
+
+10) From these experiments we selected following 4 experiments for deployment and acceleration phase. Idea is to make decision for final model for deployment post onnx optimization.
+
+1. Depthwise Separable Base experiment
+
+results/optimized_model_base_dw_sep.pth
+03_deployment_acceleration_01.ipynb
+
+2.  Depthwise Separable custom Experiment 2
+
+results/optimized_model_best_dws_exp2.pth
+03_deployment_acceleration_02.ipynb
+
+3. Depthwise Separable custom Experiment 5
+
+results/optimized_model_best_dws_exp5_pk_mem.pth
+03_deployment_acceleration_03.ipynb
+
+4. Inverted Residual Block custom experiment 3
+
+results/optimized_model_best_invert_resid_exp3.pth
+03_deployment_acceleration_04.ipynb
+
+Post onnx optimization, Model corresponding to 3rd option above performed best which has been submitted as part of the submission
+
+
+
+
+
+
+
